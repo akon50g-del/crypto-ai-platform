@@ -1,0 +1,11 @@
+# Railway service: API (NestJS) — Config-as-code file
+# Service settings: Root Directory = / (repo root), Config Path = deploy/railway/api.toml
+# Dockerfile needs repo-root context (copies canonical prisma/schema.prisma).
+[build]
+dockerfilePath = "apps/api/Dockerfile"
+
+[deploy]
+healthcheckPath = "/health"
+healthcheckTimeout = 120
+restartPolicyType = "ON_FAILURE"
+restartPolicyMaxRetries = 5

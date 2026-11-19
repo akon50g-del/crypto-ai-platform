@@ -1,0 +1,406 @@
+// AUTO-GENERATED local-dev SQLite schema — see make-sqlite-schema.py
+// Canonical production schema: ../../prisma/schema.prisma (PostgreSQL)
+// ============================================================
+// Crypto AI Signals Platform — Prisma Schema (Phase 1 Design)
+// PostgreSQL (Supabase) — مصدر الحقيقة الوحيد لهيكل البيانات
+// NestJS API يستخدم Prisma Client؛ AI Engine (Python) يكتب عبر
+// نفس قاعدة البيانات (SQLAlchemy) أو عبر Internal API.
+// ============================================================
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url       = env("DATABASE_URL")
+}
+
+// ---------------- Enums ----------------
+
+
+
+
+
+
+
+
+
+
+
+// ---------------- Users & Auth ----------------
+
+model User {
+  id            String   @id @default(cuid())
+  email         String   @unique
+  emailVerified DateTime?
+  passwordHash  String?  // null لمستخدمي Google فقط
+  name          String?
+  avatarUrl     String?
+  googleId      String?  @unique
+  planTier      String @default("FREE")
+  locale        String   @default("ar")
+  timezone      String   @default("Africa/Cairo")
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  subscription      Subscription?
+  preferences       UserPreference?
+  watchlist         WatchlistItem[]
+  notificationPrefs NotificationPreference[]
+  notifications     Notification[]
+  journalEntries    TradeJournalEntry[]
+  alertSubscriptions AlertSubscription[]
+  apiKeys           ApiKey[]
+
+  @@map("users")
+}
+
+model Subscription {
+  id                   String             @id @default(cuid())
+  userId               String             @unique
+  user                 User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+  planTier             String           @default("FREE")
+  status               String @default("ACTIVE")
+  stripeCustomerId     String?            @unique
+  stripeSubscriptionId String?            @unique
+  stripePriceId        String?
+  currentPeriodStart   DateTime?
+  currentPeriodEnd     DateTime?
+  cancelAtPeriodEnd    Boolean            @default(false)
+  createdAt            DateTime           @default(now())
+  updatedAt            DateTime           @updatedAt
+
+  payments Payment[]
+
+  @@map("subscriptions")
+}
+
+model Payment {
+  id              String       @id @default(cuid())
+  subscriptionId  String
+  subscription    Subscription @relation(fields: [subscriptionId], references: [id], onDelete: Cascade)
+  stripeInvoiceId String?      @unique
+  amountCents     Int
+  currency        String       @default("usd")
+  status          String       // paid | open | void | uncollectible
+  createdAt       DateTime     @default(now())
+
+  @@map("payments")
+}
+
+model UserPreference {
+  id              String @id @default(cuid())
+  userId          String @unique
+  user            User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  defaultBalance  Float  @default(1000)
+  riskPerTradePct Float  @default(1.0)
+  leverage        Float  @default(3)
+  minScoreAlert   Int    @default(7) // لا تنبيه أقل من هذا الـ Score
+  strategies      Json
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@map("user_preferences")
+}
+
+model WatchlistItem {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  symbol    String   // BTCUSDT
+  createdAt DateTime @default(now())
+
+  @@unique([userId, symbol])
+  @@index([userId])
+  @@map("watchlist_items")
+}
+
+// ---------------- Market Data ----------------
+
+model Symbol {
+  id        String   @id @default(cuid())
+  symbol    String   @unique // BTCUSDT
+  baseAsset String   // BTC
+  quoteAsset String  @default("USDT")
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+
+  candles   Candle[]
+  analyses  Analysis[]
+  signals   Signal[]
+
+  @@map("symbols")
+}
+
+model Candle {
+  id        BigInt   @id @default(autoincrement())
+  symbolId  String
+  symbol    Symbol   @relation(fields: [symbolId], references: [id], onDelete: Cascade)
+  timeframe String   // 15m | 1h | 4h | 1d | 5m | 1m
+  openTime  DateTime
+  open      Float
+  high      Float
+  low       Float
+  close     Float
+  volume    Float    @default(0)
+  source    String   @default("binance") // binance | cryptocom | coingecko
+  isClosed  Boolean  @default(true)
+
+  @@unique([symbolId, timeframe, openTime])
+  @@index([symbolId, timeframe, openTime])
+  @@map("candles")
+}
+
+// ---------------- AI Engine: Analyses & Signals ----------------
+
+/// كل فحص للمحرك (كل 5 دقائق × زوج × مسار) — سجل تدقيق كامل
+model Analysis {
+  id            String       @id @default(cuid())
+  symbolId      String
+  symbol        Symbol       @relation(fields: [symbolId], references: [id], onDelete: Cascade)
+  timeframeBias String       @default("4h")
+  priceAtAnalysis Float
+  priceSource   String       @default("binance")
+  bias          String       // bullish (HH+HL) | bearish (LH+LL) | range
+  regime        String @default("UNKNOWN")
+  adx           Float?
+  atr           Float?
+  // لقطة الهيكل والمناطق (JSON مرن للتدقيق وإعادة العرض على الشارت)
+  structureJson Json?        // swings, bsl, ssl, equal highs/lows, last leg
+  poiJson       Json?        // FVGs, OBs, OTE, BB/MB/RJB/IFC/FZ/BCD
+  btcContextJson Json?       // نطاق BTC + قوة نسبية
+  enrichmentJson Json?       // Nansen / liquidations (تأكيد فقط)
+  createdAt     DateTime     @default(now())
+
+  signals Signal[]
+
+  @@index([symbolId, createdAt])
+  @@map("analyses")
+}
+
+/// إشارة/إعداد واحد — قلب المنصة
+model Signal {
+  id            String       @id @default(cuid())
+  analysisId    String?
+  analysis      Analysis?    @relation(fields: [analysisId], references: [id], onDelete: SetNull)
+  symbolId      String
+  symbol        Symbol       @relation(fields: [symbolId], references: [id], onDelete: Cascade)
+  strategy      String
+  side          String
+  status        String @default("WATCH")
+  score         Int          // 0–10
+  scoreBreakdown Json        // {bias:2, poi:2, sweep:1, mss:2, ltf:1, liquidityTarget:1, rr:1}
+  grade         String?      // A+ | A | WATCH | REJECTED
+  regime        String @default("UNKNOWN")
+
+  entryZoneLow  Float
+  entryZoneHigh Float
+  entryPrice    Float?       // سعر الدخول الفعلي عند TRIGGERED
+  stopLoss      Float
+  tp1           Float
+  tp2           Float
+  rrTp1         Float?
+  rrTp2         Float?
+  invalidationPrice Float?   // مستوى الإلغاء
+  reasonAr      String       // شرح عربي مولّد من المحرك (قالب الـ Skill)
+  reasonEn      String?
+
+  // تتبع الحالة
+  readyAt       DateTime?
+  triggeredAt   DateTime?
+  closedAt      DateTime?
+  expiresAt     DateTime?    // صلاحية 24–48 ساعة للأوامر المعلقة
+  createdAt     DateTime     @default(now())
+  updatedAt     DateTime     @updatedAt
+
+  outcome       SignalOutcome?
+  notifications Notification[]
+  alertSubscriptions AlertSubscription[]
+
+  @@index([symbolId, status])
+  @@index([status, score])
+  @@index([createdAt])
+  @@map("signals")
+}
+
+/// نتيجة الإشارة بعد الإغلاق — وقود نظام التعلم
+model SignalOutcome {
+  id            String        @id @default(cuid())
+  signalId      String        @unique
+  signal        Signal        @relation(fields: [signalId], references: [id], onDelete: Cascade)
+  result        String @default("OPEN")
+  exitPrice     Float?
+  realizedR     Float?        // بعد الرسوم/الانزلاق التقديري
+  durationMinutes Int?
+  maeR          Float?        // Maximum Adverse Excursion بوحدات R
+  mfeR          Float?        // Maximum Favorable Excursion
+  notes         String?
+  closedAt      DateTime?
+  createdAt     DateTime      @default(now())
+
+  @@map("signal_outcomes")
+}
+
+/// إحصاءات أداء مجمعة لكل مسار/زوج/Regime (تُحدَّث دوريًا)
+model StrategyStats {
+  id            String       @id @default(cuid())
+  strategy      String
+  symbol        String?      // null = كل الأزواج
+  regime        String?
+  periodStart   DateTime
+  periodEnd     DateTime
+  trades        Int          @default(0)
+  wins          Int          @default(0)
+  losses        Int          @default(0)
+  winRatePct    Float        @default(0)
+  profitFactor  Float?
+  expectancyR   Float?
+  netR          Float        @default(0)
+  maxDrawdownR  Float        @default(0)
+  accepted      Boolean      @default(false) // اجتاز شروط الاعتماد؟
+  createdAt     DateTime     @default(now())
+
+  @@unique([strategy, symbol, regime, periodStart, periodEnd])
+  @@map("strategy_stats")
+}
+
+// ---------------- News ----------------
+
+model NewsItem {
+  id          String     @id @default(cuid())
+  source      String     // cointelegraph | binance | calendar...
+  title       String
+  titleAr     String?
+  url         String?    @unique
+  symbols     Json
+  impact      String @default("MEDIUM")
+  sentiment   Float?     // -1..1
+  publishedAt DateTime
+  createdAt   DateTime   @default(now())
+
+  @@index([publishedAt])
+  @@map("news_items")
+}
+
+model EconomicEvent {
+  id          String     @id @default(cuid())
+  title       String
+  currency    String     @default("USD")
+  impact      String @default("HIGH")
+  scheduledAt DateTime
+  actual      String?
+  forecast    String?
+  previous    String?
+  createdAt   DateTime   @default(now())
+
+  @@index([scheduledAt])
+  @@map("economic_events")
+}
+
+// ---------------- Notifications ----------------
+
+model NotificationPreference {
+  id         String              @id @default(cuid())
+  userId     String
+  user       User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  channel    String
+  enabled    Boolean             @default(true)
+  telegramChatId String?
+  createdAt  DateTime            @default(now())
+  updatedAt  DateTime            @updatedAt
+
+  @@unique([userId, channel])
+  @@map("notification_preferences")
+}
+
+model Notification {
+  id        String              @id @default(cuid())
+  userId    String
+  user      User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  signalId  String?
+  signal    Signal?             @relation(fields: [signalId], references: [id], onDelete: SetNull)
+  channel   String
+  status    String  @default("PENDING")
+  title     String
+  body      String
+  sentAt    DateTime?
+  error     String?
+  createdAt DateTime            @default(now())
+
+  @@index([userId, createdAt])
+  @@index([status])
+  @@map("notifications")
+}
+
+/// اشتراك مستخدم في تنبيهات إشارة/عملة معينة (Price Alerts بأسلوب TradingView)
+model AlertSubscription {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  signalId  String?
+  signal    Signal?  @relation(fields: [signalId], references: [id], onDelete: Cascade)
+  symbol    String?
+  price     Float?   // تنبيه سعري يدوي
+  condition String?  // crosses_above | crosses_below
+  message   String?
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+  @@map("alert_subscriptions")
+}
+
+// ---------------- Journal (صفقات المستخدم اليدوية) ----------------
+
+model TradeJournalEntry {
+  id            String   @id @default(cuid())
+  userId        String
+  user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  symbol        String
+  side          String
+  strategy      String?
+  entryPrice    Float
+  stopLoss      Float?
+  tp1           Float?
+  tp2           Float?
+  exitPrice     Float?   // فعلي — لا يُفترض أبدًا
+  quantity      Float?
+  fees          Float?
+  pnlUsd        Float?
+  realizedR     Float?
+  reason        String?  // سبب الدخول
+  screenshotUrl String?
+  openedAt      DateTime @default(now())
+  closedAt      DateTime?
+  createdAt     DateTime @default(now())
+
+  @@index([userId, openedAt])
+  @@map("trade_journal_entries")
+}
+
+// ---------------- Platform ----------------
+
+model ApiKey {
+  id        String    @id @default(cuid())
+  userId    String
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  name      String
+  keyHash   String    @unique
+  lastUsedAt DateTime?
+  createdAt DateTime  @default(now())
+
+  @@map("api_keys")
+}
+
+model EngineRun {
+  id          String   @id @default(cuid())
+  startedAt   DateTime @default(now())
+  finishedAt  DateTime?
+  symbolsScanned Int   @default(0)
+  signalsCreated Int   @default(0)
+  errorsJson  Json?
+  status      String   @default("running") // running | completed | failed
+
+  @@map("engine_runs")
+}

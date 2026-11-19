@@ -1,0 +1,14 @@
+# Railway service: AI Engine (Python FastAPI, scans every 5 min) — Config-as-code file
+# Service settings: Root Directory = services/ai-engine, Config Path = ../../deploy/railway/engine.toml
+# (If the config path cannot point outside the root, copy this file to services/ai-engine/railway.toml.)
+# Keep this service private (no public domain) — only the API calls it internally.
+# Note: config/strategies.json is not mounted on Railway; the engine falls back to
+# identical built-in DEFAULTS in app/core/config.py, so behavior is unchanged.
+[build]
+dockerfilePath = "Dockerfile"
+
+[deploy]
+healthcheckPath = "/health"
+healthcheckTimeout = 120
+restartPolicyType = "ON_FAILURE"
+restartPolicyMaxRetries = 5

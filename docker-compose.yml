@@ -1,0 +1,103 @@
+# Crypto AI Signals Platform — full stack (Phase 6)
+# Usage: cp .env.example .env  (fill secrets)  &&  docker compose up --build
+# Services: web :3000 · api :4000 · ai-engine :8000 · worker (background)
+#           postgres :5432 · redis :6379
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-crypto}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-crypto_password}
+      POSTGRES_DB: ${POSTGRES_DB:-crypto_ai}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-crypto}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  api:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-crypto}:${POSTGRES_PASSWORD:-crypto_password}@postgres:5432/${POSTGRES_DB:-crypto_ai}
+      JWT_SECRET: ${JWT_SECRET:-change-me-in-production}
+      AI_ENGINE_INTERNAL_TOKEN: ${AI_ENGINE_INTERNAL_TOKEN:-change-me-internal-token}
+      FRONTEND_URL: ${FRONTEND_URL:-http://localhost:3000}
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
+      GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
+      GOOGLE_CALLBACK_URL: ${GOOGLE_CALLBACK_URL:-http://localhost:4000/auth/google/callback}
+      STRIPE_SECRET_KEY: ${STRIPE_SECRET_KEY:-}
+      STRIPE_WEBHOOK_SECRET: ${STRIPE_WEBHOOK_SECRET:-}
+      STRIPE_PRICE_PRO: ${STRIPE_PRICE_PRO:-}
+      STRIPE_PRICE_VIP: ${STRIPE_PRICE_VIP:-}
+    ports:
+      - "4000:4000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  ai-engine:
+    build: ./services/ai-engine
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-crypto}:${POSTGRES_PASSWORD:-crypto_password}@postgres:5432/${POSTGRES_DB:-crypto_ai}
+      BINANCE_BASE_URL: ${BINANCE_BASE_URL:-https://data-api.binance.vision}
+    volumes:
+      - ./config:/app/config:ro
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  worker:
+    build:
+      context: .
+      dockerfile: services/worker/Dockerfile
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-crypto}:${POSTGRES_PASSWORD:-crypto_password}@postgres:5432/${POSTGRES_DB:-crypto_ai}
+      REDIS_URL: redis://redis:6379
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
+      SMTP_HOST: ${SMTP_HOST:-}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_USER: ${SMTP_USER:-}
+      SMTP_PASS: ${SMTP_PASS:-}
+      SMTP_FROM: ${SMTP_FROM:-signals@example.com}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      api:
+        condition: service_started
+
+  web:
+    build:
+      context: ./apps/web
+      args:
+        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:4000}
+        NEXT_PUBLIC_WS_URL: ${NEXT_PUBLIC_WS_URL:-http://localhost:4000}
+    ports:
+      - "3000:3000"
+    depends_on:
+      - api
+
+volumes:
+  postgres_data:
